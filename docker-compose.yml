@@ -1,0 +1,24 @@
+
+version: '3'
+services:
+  redis:
+    image: redis
+
+  log_collector:
+    build: ./log_collector
+    ports:
+      - "5000:5000"
+    depends_on:
+      - redis
+
+  log_processor:
+    build: ./log_processor
+    depends_on:
+      - redis
+
+  notif_bot:
+    build: ./notif_bot
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
