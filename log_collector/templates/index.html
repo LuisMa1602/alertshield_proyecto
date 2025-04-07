@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Logs con Redis</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .log-container {
+            background-color: #212529;
+            color: #f8f9fa;
+            border-radius: 5px;
+            padding: 15px;
+            margin-top: 20px;
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: monospace;
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            border-bottom: 1px solid #495057;
+            padding-bottom: 5px;
+        }
+        .log-timestamp {
+            color: #6c757d;
+        }
+        .log-level-info {
+            color: #0dcaf0;
+        }
+        .log-level-error {
+            color: #dc3545;
+        }
+        .log-level-warning {
+            color: #ffc107;
+        }
+        .status-indicator {
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+        .status-online {
+            background-color: #198754;
+        }
+        .status-offline {
+            background-color: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="my-4">Sistema de Logs con Redis</h1>
+        
+        <div class="card mb-4">
+            <div class="card-header">
+                Estado del Servicio
+                <span id="redis-status-indicator" class="status-indicator status-offline"></span>
+                <span id="redis-status-text">Desconectado</span>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5>Enviar Nuevo Log</h5>
+                        <form id="logForm">
+                            <div class="mb-3">
+                                <label for="logLevel" class="form-label">Nivel de Log</label>
+                                <select class="form-select" id="logLevel" required>
+                                    <option value="info">INFO</option>
+                                    <option value="error">ERROR</option>
+                                    <option value="warning">WARNING</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label for="logMessage" class="form-label">Mensaje</label>
+                                <textarea class="form-control" id="logMessage" rows="3" required></textarea>
+                            </div>
+                            <div class="mb-3">
+                                <label for="logSource" class="form-label">Origen</label>
+                                <input type="text" class="form-control" id="logSource" placeholder="Ej: servidor-web">
+                            </div>
+                            <button type="submit" class="btn btn-primary">Enviar Log</button>
+                        </form>
+                    </div>
+                    <div class="col-md-6">
+                        <h5>Estadísticas</h5>
+                        <ul class="list-group">
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                Logs hoy
+                                <span class="badge bg-primary rounded-pill" id="logs-today">0</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                Logs de error
+                                <span class="badge bg-danger rounded-pill" id="error-logs">0</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                Última conexión
+                                <span class="badge bg-secondary rounded-pill" id="last-connection">Nunca</span>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                Logs en Tiempo Real
+                <button id="clearLogs" class="btn btn-sm btn-outline-danger float-end">Limpiar</button>
+            </div>
+            <div class="card-body">
+                <div class="log-container" id="logDisplay">
+                    <div class="log-entry">Esperando logs...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const logForm = document.getElementById('logForm');
+            const logDisplay = document.getElementById('logDisplay');
+            const clearLogsBtn = document.getElementById('clearLogs');
+            const redisStatusIndicator = document.getElementById('redis-status-indicator');
+            const redisStatusText = document.getElementById('redis-status-text');
+            
+            // Verificar estado de Redis al cargar
+            checkRedisStatus();
+            
+            // Configurar EventSource para recibir logs en tiempo real
+            let eventSource;
+            setupEventSource();
+            
+            // Manejar envío de nuevo log
+            logForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const logLevel = document.getElementById('logLevel').value;
+                const logMessage = document.getElementById('logMessage').value;
+                const logSource = document.getElementById('logSource').value || 'web-interface';
+                
+                const logData = {
+                    level: logLevel,
+                    message: logMessage,
+                    source: logSource,
+                    timestamp: new Date().toISOString()
+                };
+                
+                fetch('/log', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(logData)
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => { throw err; });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // Limpiar el formulario
+                    document.getElementById('logMessage').value = '';
+                    document.getElementById('logSource').value = '';
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    addLogToDisplay({
+                        level: 'error',
+                        message: `Error al enviar log: ${error.message || 'Error desconocido'}`,
+                        timestamp: new Date().toISOString()
+                    });
+                });
+            });
+            
+            // Limpiar logs mostrados
+            clearLogsBtn.addEventListener('click', function() {
+                logDisplay.innerHTML = '<div class="log-entry">Logs limpiados</div>';
+            });
+            
+            // Función para verificar estado de Redis
+            function checkRedisStatus() {
+                fetch('/redis-status')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'online') {
+                            redisStatusIndicator.className = 'status-indicator status-online';
+                            redisStatusText.textContent = 'Conectado';
+                        } else {
+                            redisStatusIndicator.className = 'status-indicator status-offline';
+                            redisStatusText.textContent = 'Desconectado';
+                            setTimeout(setupEventSource, 5000); // Reintentar conexión
+                        }
+                    })
+                    .catch(() => {
+                        redisStatusIndicator.className = 'status-indicator status-offline';
+                        redisStatusText.textContent = 'Error al conectar';
+                        setTimeout(checkRedisStatus, 5000); // Reintentar después de 5 segundos
+                    });
+            }
+            
+            // Configurar EventSource para logs en tiempo real
+            function setupEventSource() {
+                if (eventSource) {
+                    eventSource.close();
+                }
+                
+                eventSource = new EventSource('/stream-logs');
+                
+                eventSource.onmessage = function(e) {
+                    const logData = JSON.parse(e.data);
+                    addLogToDisplay(logData);
+                    updateStats(logData);
+                };
+                
+                eventSource.onerror = function() {
+                    console.error('Error en la conexión SSE');
+                    setTimeout(setupEventSource, 5000); // Reintentar conexión
+                };
+            }
+            
+            // Añadir log a la visualización
+            function addLogToDisplay(logData) {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry';
+                
+                const timestamp = new Date(logData.timestamp).toLocaleString();
+                const levelClass = `log-level-${logData.level}`;
+                
+                logEntry.innerHTML = `
+                    <span class="log-timestamp">[${timestamp}]</span>
+                    <span class="${levelClass}">${logData.level.toUpperCase()}</span>
+                    ${logData.source ? `<span class="text-muted">(${logData.source})</span>` : ''}
+                    : ${logData.message}
+                `;
+                
+                logDisplay.insertBefore(logEntry, logDisplay.firstChild);
+            }
+            
+            // Actualizar estadísticas (simplificado)
+            function updateStats(logData) {
+                // Aquí podrías implementar lógica para actualizar los contadores
+                // Esto es solo un ejemplo básico
+                if (logData.level === 'error') {
+                    const errorBadge = document.getElementById('error-logs');
+                    errorBadge.textContent = parseInt(errorBadge.textContent) + 1;
+                }
+                
+                const todayBadge = document.getElementById('logs-today');
+                todayBadge.textContent = parseInt(todayBadge.textContent) + 1;
+                
+                document.getElementById('last-connection').textContent = 'Ahora';
+            }
+        });
+    </script>
+</body>
+</html>
