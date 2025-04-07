@@ -1,5 +1,4 @@
-
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template, Response  
 import redis
 import json
 import logging
@@ -18,6 +17,26 @@ try:
 except redis.exceptions.ConnectionError as e:
     logger.error(f"Fallo en la conexión a Redis: {e}")
     r = None  # Marcar como no disponible
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/redis-status')
+def redis_status():
+    if r and r.ping():
+        return jsonify({'status': 'online'})
+    return jsonify({'status': 'offline'}), 503
+
+@app.route('/stream-logs')
+def stream_logs():
+    def event_stream():
+        pubsub = r.pubsub()
+        pubsub.subscribe('logs')
+        for message in pubsub.listen():
+            if message['type'] == 'message':
+                yield f"data: {message['data'].decode()}\n\n"
+    return Response(event_stream(), mimetype="text/event-stream")
 
 @app.route('/log', methods=['POST'])
 def log():
